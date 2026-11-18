@@ -1,0 +1,113 @@
+cd ~/Documents/GitHub
+
+# 1. Create the .github repository under Salus-Discovery (creates it private by default)
+gh repo create Salus-Discovery/.github --private --clone
+
+cd .github
+
+# 2. Create the workflows directory
+mkdir -p .github/workflows
+
+# 3. Create the universal reusable workflow
+cat << 'EOF' > .github/workflows/universal_tag.yml
+name: Universal Semantic Tagger
+
+on:
+  workflow_call:
+    inputs:
+      initial_seed_version:
+        description: 'Version to seed if repo has no release tags'
+        required: false
+        default: 'v1.0.0'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Auto-tag commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch --tags --force
+
+          # 1. Skip if already tagged
+          if [ -n "$(git tag --points-at HEAD)" ]; then
+            echo "Commit already tagged. Skipping."
+            exit 0
+          fi
+
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          echo "Current Branch: $BRANCH (Default: $DEFAULT_BRANCH)"
+
+          # 2. Find reachable base release tag (pure vX.Y.Z, no hyphens)
+          REACHABLE_BASE=$(git describe --tags --match="v[0-9]*.[0-9]*.[0-9]*" --exclude="*-*" --abbrev=0 2>/dev/null || true)
+          if [ -z "$REACHABLE_BASE" ]; then
+            REACHABLE_BASE=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | grep -v "-" | sort -V | tail -n 1)
+          fi
+          if [ -z "$REACHABLE_BASE" ]; then
+            REACHABLE_BASE="${{ inputs.initial_seed_version }}"
+          fi
+          echo "Base release version: $REACHABLE_BASE"
+
+          # 3. Universal Branch Decision
+          if [ "$BRANCH" = "$DEFAULT_BRANCH" ]; then
+            if [ -z "$(git tag -l "$REACHABLE_BASE")" ]; then
+              NEW_TAG="$REACHABLE_BASE"
+            else
+              VER="${REACHABLE_BASE#v}"
+              MAJOR=$(echo "$VER" | cut -d. -f1)
+              MINOR=$(echo "$VER" | cut -d. -f2)
+              PATCH=$(echo "$VER" | cut -d. -f3)
+
+              COMMIT_MSGS=$(git log "${REACHABLE_BASE}..HEAD" --pretty=%B 2>/dev/null || git log -1 --pretty=%B)
+
+              if echo "$COMMIT_MSGS" | grep -iqE "(#major|BREAKING CHANGE)"; then
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+              elif echo "$COMMIT_MSGS" | grep -iqE "(#minor|^feat(\(.*\))?:)"; then
+                MINOR=$((MINOR + 1))
+                PATCH=0
+              else
+                PATCH=$((PATCH + 1))
+              fi
+              NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+            fi
+          else
+            # Dev or feature branch: tag as vX.Y.Z-<BRANCH>.<N>
+            CLEAN_BRANCH=$(echo "$BRANCH" | tr '/' '-' | tr ' ' '-')
+            LATEST_BRANCH_TAG=$(git tag -l "${REACHABLE_BASE}-${CLEAN_BRANCH}.*" | sort -V | tail -n 1)
+
+            if [ -z "$LATEST_BRANCH_TAG" ]; then
+              DEV_NUM=1
+            else
+              LAST_NUM=$(echo "$LATEST_BRANCH_TAG" | sed -E "s/.*\.([0-9]+)$/\1/")
+              if [[ "$LAST_NUM" =~ ^[0-9]+$ ]]; then
+                DEV_NUM=$((LAST_NUM + 1))
+              else
+                DEV_NUM=1
+              fi
+            fi
+            NEW_TAG="${REACHABLE_BASE}-${CLEAN_BRANCH}.${DEV_NUM}"
+          fi
+
+          echo "Tagging commit as: $NEW_TAG"
+          git tag -a "$NEW_TAG" -m "Automated tag $NEW_TAG [skip ci]"
+          git push origin "$NEW_TAG"
+EOF
+
+# 4. Commit and push to main
+git add .
+git commit -m "Add universal semantic tagger reusable workflow"
+git branch -M main
+git push -u origin main
