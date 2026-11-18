@@ -1,15 +1,3 @@
-cd ~/Documents/GitHub
-
-# 1. Create the .github repository under Salus-Discovery (creates it private by default)
-gh repo create Salus-Discovery/.github --private --clone
-
-cd .github
-
-# 2. Create the workflows directory
-mkdir -p .github/workflows
-
-# 3. Create the universal reusable workflow
-cat << 'EOF' > .github/workflows/universal_tag.yml
 name: Universal Semantic Tagger
 
 on:
@@ -104,4 +92,4 @@ jobs:
           echo "Tagging commit as: $NEW_TAG"
           git tag -a "$NEW_TAG" -m "Automated tag $NEW_TAG [skip ci]"
           git push origin "$NEW_TAG"
-EOF
+
